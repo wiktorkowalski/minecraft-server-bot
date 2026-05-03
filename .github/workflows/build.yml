@@ -1,0 +1,21 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-deploy:
+    uses: wiktorkowalski/github-workflows/.github/workflows/dotnet-docker-deploy.yml@master
+    with:
+      image-name: wiktorkowalski/minecraft-server-bot
+      dotnet-project: src/MinecraftServerBot/MinecraftServerBot.csproj
+      deploy-compose-path: /home/ubuntu/docker/minecraft-server-bot
+      deploy-runner-labels: '["self-hosted", "homelab"]'
+    secrets: inherit
