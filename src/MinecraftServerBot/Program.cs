@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data;
 using MinecraftServerBot.Minecraft;
+using MinecraftServerBot.Services;
 using Serilog;
 
 Env.TraversePath().Load();
@@ -68,6 +69,9 @@ try
     builder.Services.AddSingleton<IRconClient, RconClient>();
     builder.Services.AddSingleton<ISlpClient, SlpClient>();
     builder.Services.AddSingleton<McServerActions>();
+
+    builder.Services.AddSingleton<McStatusPollerService>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<McStatusPollerService>());
 
     var app = builder.Build();
 
