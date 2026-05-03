@@ -47,3 +47,6 @@ appsettings.Local.json
 # Local runtime data (root-level only — anchored to avoid matching src/.../Data/)
 /data/
 mc-bot.db*
+
+# Deploy-host artifacts (compose + .env template for the homelab VM)
+/deploy-host/
