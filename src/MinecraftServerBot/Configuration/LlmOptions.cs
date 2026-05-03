@@ -8,9 +8,9 @@ public sealed class LlmOptions
 
     public required string ApiKey { get; init; }
 
-    public string Model { get; init; } = "deepseek/deepseek-v4-flash";
+    public string Model { get; init; } = "moonshotai/kimi-k2.6";
 
-    public double Temperature { get; init; } = 0.3;
+    public double Temperature { get; init; } = 0.7;
 
     public int MaxOutputTokens { get; init; } = 1024;
 }
