@@ -2,6 +2,7 @@ using DotNetEnv;
 using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data;
+using MinecraftServerBot.Llm;
 using MinecraftServerBot.Minecraft;
 using MinecraftServerBot.Plugins;
 using MinecraftServerBot.Services;
@@ -69,6 +70,10 @@ try
 
     builder.Services.AddDbContextFactory<McBotDbContext>(options =>
         options.UseSqlite(connectionString));
+
+    builder.Services.AddTransient<OpenRouterServerToolsHandler>();
+    builder.Services.AddHttpClient("openrouter")
+        .AddHttpMessageHandler<OpenRouterServerToolsHandler>();
 
     builder.Services.AddSingleton<IRconClient, RconClient>();
     builder.Services.AddSingleton<ISlpClient, SlpClient>();

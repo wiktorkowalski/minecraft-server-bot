@@ -13,4 +13,6 @@ public sealed class LlmOptions
     public double Temperature { get; init; } = 0.7;
 
     public int MaxOutputTokens { get; init; } = 1024;
+
+    public bool EnableWebTools { get; init; } = true;
 }

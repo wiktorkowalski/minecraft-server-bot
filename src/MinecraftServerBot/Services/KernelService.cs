@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.SemanticKernel;
@@ -17,6 +18,7 @@ public sealed class KernelService
     public KernelService(
         IOptions<LlmOptions> initialOptions,
         IOptionsMonitor<LlmOptions> options,
+        IHttpClientFactory httpClientFactory,
         ILogger<KernelService> logger,
         ServerStatusPlugin statusPlugin,
         ServerControlPlugin controlPlugin,
@@ -26,12 +28,14 @@ public sealed class KernelService
         _logger = logger;
 
         var initial = initialOptions.Value;
+        var httpClient = httpClientFactory.CreateClient("openrouter");
         var builder = Kernel.CreateBuilder();
 
         builder.AddOpenAIChatCompletion(
             modelId: initial.Model,
             apiKey: initial.ApiKey,
-            endpoint: new Uri(initial.Endpoint));
+            endpoint: new Uri(initial.Endpoint),
+            httpClient: httpClient);
 
         builder.Plugins.AddFromObject(statusPlugin, "ServerStatus");
         builder.Plugins.AddFromObject(controlPlugin, "ServerControl");
@@ -61,9 +65,11 @@ public sealed class KernelService
             },
         };
 
+        var sw = Stopwatch.StartNew();
         var response = await _chat.GetChatMessageContentAsync(history, settings, _kernel, ct);
+        sw.Stop();
 
-        LogTokenUsage(response, opts.Model);
+        LogTokenUsage(response, opts.Model, sw.Elapsed, mode: "chat");
         return response;
     }
 
@@ -88,32 +94,37 @@ public sealed class KernelService
         history.AddSystemMessage(systemPrompt);
         history.AddUserMessage(userPrompt);
 
+        var sw = Stopwatch.StartNew();
         var response = await _chat.GetChatMessageContentAsync(history, settings, _kernel, ct);
+        sw.Stop();
 
-        LogTokenUsage(response, opts.Model);
+        LogTokenUsage(response, opts.Model, sw.Elapsed, mode: "oneshot");
         return response.Content ?? string.Empty;
     }
 
-    private void LogTokenUsage(ChatMessageContent response, string model)
+    private void LogTokenUsage(ChatMessageContent response, string model, TimeSpan elapsed, string mode)
     {
-        if (response.Metadata is null)
-        {
-            return;
-        }
-
         int? inputTokens = null;
         int? outputTokens = null;
-        if (response.Metadata.TryGetValue("Usage", out var usageObj) && usageObj is not null)
+        if (response.Metadata is not null
+            && response.Metadata.TryGetValue("Usage", out var usageObj)
+            && usageObj is not null)
         {
             var t = usageObj.GetType();
             inputTokens = (int?)t.GetProperty("InputTokenCount")?.GetValue(usageObj);
             outputTokens = (int?)t.GetProperty("OutputTokenCount")?.GetValue(usageObj);
         }
 
+        var ms = (int)elapsed.TotalMilliseconds;
+        var likelyWebTool = ms > 5000 || (inputTokens is { } it && it > 3000);
+
         _logger.LogInformation(
-            "LLM completion model={Model} input={Input} output={Output}",
+            "LLM completion mode={Mode} model={Model} input={Input} output={Output} duration={DurationMs}ms web_tool_likely={WebToolLikely}",
+            mode,
             model,
             inputTokens,
-            outputTokens);
+            outputTokens,
+            ms,
+            likelyWebTool);
     }
 }

@@ -190,11 +190,24 @@ public sealed class DiscordBotService : BackgroundService
                 return;
             }
 
+            _logger.LogInformation(
+                "Handling mention: user={User} channel={Channel} dm={IsDm} thread={IsThread} spawnThread={SpawnThread} len={Len}",
+                e.Author.Id,
+                channel.Id,
+                isDm,
+                channel.IsThread,
+                spawnNewThread,
+                content.Length);
+
             if (spawnNewThread)
             {
                 replyChannel = await e.Message.CreateThreadAsync(
                     BuildThreadName(content),
                     AutoArchiveDuration.Day);
+                _logger.LogInformation(
+                    "Spawned thread {ThreadId} from message in channel {Channel}",
+                    replyChannel.Id,
+                    channel.Id);
             }
 
             await using var scope = _services.CreateAsyncScope();
