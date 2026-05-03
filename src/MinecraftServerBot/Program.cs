@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data;
 using MinecraftServerBot.Minecraft;
+using MinecraftServerBot.Plugins;
 using MinecraftServerBot.Services;
 using Serilog;
 
@@ -74,6 +75,9 @@ try
     builder.Services.AddHostedService(sp => sp.GetRequiredService<McStatusPollerService>());
 
     builder.Services.AddSingleton<RateLimitService>();
+    builder.Services.AddSingleton<ConversationService>();
+    builder.Services.AddSingleton<ServerStatusPlugin>();
+    builder.Services.AddSingleton<KernelService>();
     builder.Services.AddSingleton<DiscordBotService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBotService>());
 

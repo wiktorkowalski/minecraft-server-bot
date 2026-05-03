@@ -1,4 +1,5 @@
 using DSharpPlus;
+using DSharpPlus.Entities;
 using DSharpPlus.EventArgs;
 using DSharpPlus.SlashCommands;
 using Microsoft.Extensions.Hosting;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MinecraftServerBot.Commands;
 using MinecraftServerBot.Configuration;
+using MinecraftServerBot.Data.Entities;
 
 namespace MinecraftServerBot.Services;
 
@@ -106,6 +108,7 @@ public sealed class DiscordBotService : BackgroundService
         _client.Ready += OnReady;
         _client.SocketErrored += OnSocketError;
         _client.Resumed += OnResumed;
+        _client.MessageCreated += OnMessageCreatedAsync;
 
         await _client.ConnectAsync();
         _reconnectAttempts = 0;
@@ -133,5 +136,86 @@ public sealed class DiscordBotService : BackgroundService
     {
         _logger.LogWarning(e.Exception, "Discord socket error");
         return Task.CompletedTask;
+    }
+
+    private async Task OnMessageCreatedAsync(DiscordClient client, MessageCreateEventArgs e)
+    {
+        if (e.Author.IsBot)
+        {
+            return;
+        }
+
+        var isDm = e.Channel.IsPrivate;
+        var mentionsUs = e.MentionedUsers.Any(u => u.Id == client.CurrentUser.Id);
+
+        if (isDm)
+        {
+            if (_options.DmFromAdminsOnly && !_options.AdminUserIds.Contains(e.Author.Id))
+            {
+                return;
+            }
+        }
+        else
+        {
+            if (e.Channel.Id != _options.AllowedChannelId)
+            {
+                return;
+            }
+
+            if (!mentionsUs)
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            var content = StripMention(e.Message.Content, client.CurrentUser.Id);
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return;
+            }
+
+            await using var scope = _services.CreateAsyncScope();
+            var conversation = scope.ServiceProvider.GetRequiredService<MinecraftServerBot.Services.ConversationService>();
+            var kernel = scope.ServiceProvider.GetRequiredService<MinecraftServerBot.Services.KernelService>();
+
+            await e.Channel.TriggerTypingAsync();
+
+            var guildId = e.Guild?.Id ?? 0UL;
+            var history = await conversation.LoadHistoryAsync(guildId, e.Channel.Id);
+            history.AddUserMessage(content);
+
+            var response = await kernel.CompleteAsync(history);
+            var text = response.Content ?? "(no response)";
+
+            await conversation.PersistAsync(guildId, e.Channel.Id, ConversationRole.User, content, e.Author.Id);
+            await conversation.PersistAsync(guildId, e.Channel.Id, ConversationRole.Assistant, text);
+
+            await e.Message.RespondAsync(text.Length > 1900 ? text[..1900] + "…" : text);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling @mention from {User}", e.Author.Id);
+            try
+            {
+                await e.Message.RespondAsync($"Sorry, hit an error: `{ex.Message}`");
+            }
+            catch
+            {
+                // best effort
+            }
+        }
+    }
+
+    private static string StripMention(string content, ulong botUserId)
+    {
+        var mentionTags = new[] { $"<@{botUserId}>", $"<@!{botUserId}>" };
+        foreach (var tag in mentionTags)
+        {
+            content = content.Replace(tag, string.Empty);
+        }
+
+        return content.Trim();
     }
 }
