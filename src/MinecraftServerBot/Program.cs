@@ -73,6 +73,10 @@ try
     builder.Services.AddSingleton<McStatusPollerService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<McStatusPollerService>());
 
+    builder.Services.AddSingleton<RateLimitService>();
+    builder.Services.AddSingleton<DiscordBotService>();
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBotService>());
+
     var app = builder.Build();
 
     var dbFactory = app.Services.GetRequiredService<IDbContextFactory<McBotDbContext>>();
