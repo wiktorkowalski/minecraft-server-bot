@@ -124,9 +124,11 @@ public sealed class DiscordBotService : BackgroundService
     private Task OnReady(DiscordClient client, ReadyEventArgs e)
     {
         _logger.LogInformation(
-            "Discord connected as {Username}#{Discriminator}",
+            "Discord connected as {Username}#{Discriminator}. AllowedChannel={AllowedChannel} BridgeChannel={BridgeChannel}",
             client.CurrentUser.Username,
-            client.CurrentUser.Discriminator);
+            client.CurrentUser.Discriminator,
+            _options.AllowedChannelId,
+            _options.McChatBridgeChannelId?.ToString() ?? "(disabled)");
         _readyTcs.TrySetResult();
         return Task.CompletedTask;
     }
@@ -146,13 +148,21 @@ public sealed class DiscordBotService : BackgroundService
     private async Task OnMessageCreatedAsync(DiscordClient client, MessageCreateEventArgs e)
     {
         var bridgeChannelId = _options.McChatBridgeChannelId;
-        if (bridgeChannelId is { } bcid
-            && e.Channel.Id == bcid
-            && e.Message.WebhookId is not null
-            && e.Message.WebhookId != 0)
+        if (bridgeChannelId is { } bcid && e.Channel.Id == bcid)
         {
-            await HandleBridgeChatAsync(client, e);
-            return;
+            _logger.LogInformation(
+                "Bridge channel msg seen: webhookId={WebhookId} authorId={AuthorId} authorName={Author} isBot={IsBot} contentLen={Len}",
+                e.Message.WebhookId,
+                e.Author.Id,
+                e.Author.Username,
+                e.Author.IsBot,
+                (e.Message.Content ?? string.Empty).Length);
+
+            if (e.Message.WebhookId is not null && e.Message.WebhookId != 0)
+            {
+                await HandleBridgeChatAsync(client, e);
+                return;
+            }
         }
 
         if (e.Author.IsBot)
@@ -197,7 +207,7 @@ public sealed class DiscordBotService : BackgroundService
 
         try
         {
-            var content = StripMention(e.Message.Content, client.CurrentUser.Id);
+            var content = StripMention(e.Message.Content ?? string.Empty, client.CurrentUser.Id);
             if (string.IsNullOrWhiteSpace(content))
             {
                 return;
