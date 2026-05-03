@@ -8,8 +8,6 @@ public sealed class ConversationOptions
 
     public int MaxAgeDays { get; init; } = 14;
 
-    public string? SystemPromptPath { get; init; }
-
     public string SystemPrompt { get; init; } =
         "You are MinecraftServerBot, a helpful operator for a Minecraft server. " +
         "You can read live server status and run actions via tool calls. " +
