@@ -1,6 +1,17 @@
 namespace MinecraftServerBot.Plugins;
 
-public sealed record LlmInvocationContext(ulong ChannelId, ulong GuildId, ulong UserId, bool IsAdmin);
+public enum InvocationOrigin
+{
+    Discord,
+    InGame,
+}
+
+public sealed record LlmInvocationContext(
+    ulong ChannelId,
+    ulong GuildId,
+    ulong UserId,
+    bool IsAdmin,
+    InvocationOrigin Origin);
 
 public sealed class LlmInvocationContextAccessor
 {

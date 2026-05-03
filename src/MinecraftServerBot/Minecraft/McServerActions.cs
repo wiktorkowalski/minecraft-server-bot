@@ -62,6 +62,42 @@ public sealed class McServerActions
     public Task<RconResult> SayAsync(string message, CancellationToken ct = default) =>
         _rcon.ExecuteAsync($"say {message}", ct);
 
+    public Task<RconResult> TellrawAllAsync(string text, CancellationToken ct = default)
+    {
+        var escaped = JsonEscape(text);
+        var json = $"[{{\"text\":\"[bot] \",\"color\":\"gray\"}},{{\"text\":\"{escaped}\"}}]";
+        return _rcon.ExecuteAsync($"tellraw @a {json}", ct);
+    }
+
+    private static string JsonEscape(string s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length + 8);
+        foreach (var ch in s)
+        {
+            switch (ch)
+            {
+                case '\\': sb.Append("\\\\"); break;
+                case '"': sb.Append("\\\""); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (ch < 0x20)
+                    {
+                        sb.Append($"\\u{(int)ch:x4}");
+                    }
+                    else
+                    {
+                        sb.Append(ch);
+                    }
+
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     public async Task<RconResult> RestartAsync(CancellationToken ct = default)
     {
         _logger.LogInformation("Initiating restart: save-all then stop");

@@ -34,12 +34,12 @@ public sealed class ServerControlPlugin
     }
 
     [KernelFunction("broadcast")]
-    [Description("Send an in-game broadcast to all players (RCON 'say <text>'). No confirmation required.")]
+    [Description("Send an in-game broadcast to all players (renders as '[bot] <text>' in chat). No confirmation required.")]
     public async Task<string> BroadcastAsync(
         [Description("Message text to broadcast in-game")] string message)
     {
         var ctx = _context.Current;
-        var result = await _actions.SayAsync(message);
+        var result = await _actions.TellrawAllAsync(message);
         if (ctx is not null)
         {
             await _audit.WriteAsync(
@@ -51,7 +51,7 @@ public sealed class ServerControlPlugin
                 detail: result.Error);
         }
 
-        return result.Ok ? $"broadcast sent: {message}" : $"failed: {result.Error}";
+        return result.Ok ? $"broadcast sent: [bot] {message}" : $"failed: {result.Error}";
     }
 
     [KernelFunction("save_world")]
@@ -90,6 +90,11 @@ public sealed class ServerControlPlugin
         {
             _logger.LogWarning("LLM tool {Action} called with no invocation context", action);
             return $"can't stage {action}: no channel context.";
+        }
+
+        if (ctx.Origin == InvocationOrigin.InGame)
+        {
+            return $"can't run {action} from in-game chat — ping me in discord and click confirm there.";
         }
 
         var client = _bot.Client;

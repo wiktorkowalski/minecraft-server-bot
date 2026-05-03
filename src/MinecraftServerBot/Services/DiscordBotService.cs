@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using DSharpPlus;
 using DSharpPlus.Entities;
 using DSharpPlus.EventArgs;
@@ -8,6 +10,7 @@ using Microsoft.Extensions.Options;
 using MinecraftServerBot.Commands;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data.Entities;
+using MinecraftServerBot.Minecraft;
 using MinecraftServerBot.Plugins;
 
 namespace MinecraftServerBot.Services;
@@ -142,6 +145,16 @@ public sealed class DiscordBotService : BackgroundService
 
     private async Task OnMessageCreatedAsync(DiscordClient client, MessageCreateEventArgs e)
     {
+        var bridgeChannelId = _options.McChatBridgeChannelId;
+        if (bridgeChannelId is { } bcid
+            && e.Channel.Id == bcid
+            && e.Message.WebhookId is not null
+            && e.Message.WebhookId != 0)
+        {
+            await HandleBridgeChatAsync(client, e);
+            return;
+        }
+
         if (e.Author.IsBot)
         {
             return;
@@ -222,7 +235,12 @@ public sealed class DiscordBotService : BackgroundService
             history.AddUserMessage(content);
 
             var isAdmin = _options.AdminUserIds.Contains(e.Author.Id);
-            ctxAccessor.Current = new LlmInvocationContext(replyChannel.Id, guildId, e.Author.Id, isAdmin);
+            ctxAccessor.Current = new LlmInvocationContext(
+                replyChannel.Id,
+                guildId,
+                e.Author.Id,
+                isAdmin,
+                InvocationOrigin.Discord);
 
             var response = await kernel.CompleteAsync(history);
             var text = string.IsNullOrWhiteSpace(response.Content)
@@ -258,6 +276,125 @@ public sealed class DiscordBotService : BackgroundService
 
         return string.IsNullOrWhiteSpace(oneLine) ? "Chat" : oneLine;
     }
+
+    private async Task HandleBridgeChatAsync(DiscordClient client, MessageCreateEventArgs e)
+    {
+        const ulong virtualChannelId = ulong.MaxValue;
+        const ulong globalRateLimitKey = ulong.MaxValue;
+
+        await using var scope = _services.CreateAsyncScope();
+        var sp = scope.ServiceProvider;
+        var mcChatOpts = sp.GetRequiredService<IOptionsMonitor<McChatOptions>>().CurrentValue;
+        var rateLimit = sp.GetRequiredService<RateLimitService>();
+        var audit = sp.GetRequiredService<AuditService>();
+
+        var playerName = e.Author.Username ?? string.Empty;
+        var rawContent = e.Message.Content ?? string.Empty;
+        var playerKey = HashPlayerKey(playerName);
+
+        var trigger = mcChatOpts.Triggers.FirstOrDefault(t =>
+            rawContent.Contains(t, StringComparison.OrdinalIgnoreCase));
+        if (trigger is null)
+        {
+            if (mcChatOpts.AuditUntriggered)
+            {
+                await audit.WriteAsync(playerKey, AuditSource.InGame, "chat_skipped",
+                    AuditOutcome.Blocked, args: Truncate(rawContent, 80), detail: "no_trigger");
+            }
+
+            return;
+        }
+
+        var stripped = StripTrigger(rawContent, mcChatOpts.Triggers).Trim();
+        if (string.IsNullOrWhiteSpace(stripped))
+        {
+            return;
+        }
+
+        if (!rateLimit.TryAcquire(playerKey, mcChatOpts.PerPlayerPerMinute, TimeSpan.FromMinutes(1)))
+        {
+            await audit.WriteAsync(playerKey, AuditSource.InGame, "chat_skipped",
+                AuditOutcome.Blocked, args: $"[ply {playerName}] {Truncate(stripped, 80)}",
+                detail: "per_player_rl");
+            return;
+        }
+
+        if (!rateLimit.TryAcquire(globalRateLimitKey, mcChatOpts.GlobalPerMinute, TimeSpan.FromMinutes(1)))
+        {
+            await audit.WriteAsync(playerKey, AuditSource.InGame, "chat_skipped",
+                AuditOutcome.Blocked, args: $"[ply {playerName}] {Truncate(stripped, 80)}",
+                detail: "global_rl");
+            return;
+        }
+
+        _logger.LogInformation(
+            "Handling bridge chat: player={Player} channel={Channel} len={Len}",
+            playerName, e.Channel.Id, stripped.Length);
+
+        try
+        {
+            var conversation = sp.GetRequiredService<ConversationService>();
+            var kernel = sp.GetRequiredService<KernelService>();
+            var ctxAccessor = sp.GetRequiredService<LlmInvocationContextAccessor>();
+
+            await e.Channel.TriggerTypingAsync();
+
+            var history = await conversation.LoadHistoryAsync(0UL, virtualChannelId);
+            var userTurn = $"[ply {playerName}] {stripped}";
+            history.AddUserMessage(userTurn);
+
+            ctxAccessor.Current = new LlmInvocationContext(
+                virtualChannelId,
+                0UL,
+                playerKey,
+                IsAdmin: false,
+                InvocationOrigin.InGame);
+
+            var response = await kernel.CompleteAsync(history);
+            var raw = string.IsNullOrWhiteSpace(response.Content) ? "ok" : response.Content!;
+            var sanitized = McChatSanitizer.OneLine(raw, mcChatOpts.MaxLineLength);
+
+            await conversation.PersistAsync(0UL, virtualChannelId, ConversationRole.User, userTurn, playerKey);
+            await conversation.PersistAsync(0UL, virtualChannelId, ConversationRole.Assistant, sanitized);
+
+            await e.Channel.SendMessageAsync(sanitized);
+
+            await audit.WriteAsync(playerKey, AuditSource.InGame, "chat_replied",
+                AuditOutcome.Ok, args: $"[ply {playerName}] {Truncate(stripped, 80)}",
+                detail: Truncate(sanitized, 120));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Bridge chat handler failed for player {Player}", playerName);
+            await audit.WriteAsync(playerKey, AuditSource.InGame, "chat_error",
+                AuditOutcome.Error, args: $"[ply {playerName}]", detail: ex.Message);
+        }
+    }
+
+    private static string StripTrigger(string content, IEnumerable<string> triggers)
+    {
+        var result = content;
+        foreach (var t in triggers)
+        {
+            int idx;
+            while ((idx = result.IndexOf(t, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                result = result.Remove(idx, t.Length);
+            }
+        }
+
+        return result;
+    }
+
+    private static ulong HashPlayerKey(string playerName)
+    {
+        var bytes = Encoding.UTF8.GetBytes(playerName.ToLowerInvariant());
+        var hash = SHA256.HashData(bytes);
+        return BitConverter.ToUInt64(hash, 0);
+    }
+
+    private static string Truncate(string s, int max) =>
+        string.IsNullOrEmpty(s) || s.Length <= max ? s : s[..max] + "…";
 
     private async Task OnComponentInteractionAsync(DiscordClient client, ComponentInteractionCreateEventArgs e)
     {

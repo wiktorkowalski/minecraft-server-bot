@@ -150,17 +150,17 @@ public sealed class InGameCommentaryService : BackgroundService
                 + "no quotes, no markdown (minecraft chat is plain text), no @mentions, no newlines. just the raw line of text.";
 
             var line = await _kernel.OneShotAsync(system, trigger, maxTokens: 200, ct);
-            line = SanitizeLine(line, opts.MaxLineLength);
+            line = McChatSanitizer.OneLine(line, opts.MaxLineLength);
             if (string.IsNullOrWhiteSpace(line))
             {
                 return;
             }
 
-            var result = await _actions.SayAsync(line, ct);
+            var result = await _actions.TellrawAllAsync(line, ct);
             if (result.Ok)
             {
                 _lastSayUtc = DateTime.UtcNow;
-                _logger.LogInformation("In-game commentary: {Line}", line);
+                _logger.LogInformation("In-game commentary: [bot] {Line}", line);
             }
             else
             {
@@ -175,21 +175,5 @@ public sealed class InGameCommentaryService : BackgroundService
         {
             _gate.Release();
         }
-    }
-
-    private static string SanitizeLine(string raw, int maxLen)
-    {
-        if (string.IsNullOrEmpty(raw))
-        {
-            return string.Empty;
-        }
-
-        var line = raw.Replace('\r', ' ').Replace('\n', ' ').Trim().Trim('"', '\'', '`');
-        if (line.Length > maxLen)
-        {
-            line = line[..maxLen];
-        }
-
-        return line;
     }
 }

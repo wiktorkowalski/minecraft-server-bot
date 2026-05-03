@@ -15,4 +15,6 @@ public sealed class DiscordOptions
     public bool DmFromAdminsOnly { get; init; } = true;
 
     public bool PublicActionConfirmations { get; init; }
+
+    public ulong? McChatBridgeChannelId { get; init; }
 }

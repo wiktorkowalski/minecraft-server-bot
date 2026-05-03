@@ -63,6 +63,9 @@ try
     builder.Services.AddOptions<InGameCommentaryOptions>()
         .Bind(builder.Configuration.GetSection(InGameCommentaryOptions.SectionName));
 
+    builder.Services.AddOptions<McChatOptions>()
+        .Bind(builder.Configuration.GetSection(McChatOptions.SectionName));
+
     var dataPath = Environment.GetEnvironmentVariable("DATA_PATH") ?? "data";
     Directory.CreateDirectory(dataPath);
     var connectionString = builder.Configuration.GetConnectionString("Database")

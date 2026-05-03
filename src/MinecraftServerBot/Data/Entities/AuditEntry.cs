@@ -6,6 +6,7 @@ public enum AuditSource
     LlmTool,
     Schedule,
     System,
+    InGame,
 }
 
 public enum AuditOutcome
