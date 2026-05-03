@@ -77,6 +77,9 @@ try
     builder.Services.AddSingleton<DiscordBotService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBotService>());
 
+    builder.Services.AddHostedService<PresenceUpdaterService>();
+    builder.Services.AddHostedService<AnnouncementService>();
+
     var app = builder.Build();
 
     var dbFactory = app.Services.GetRequiredService<IDbContextFactory<McBotDbContext>>();
