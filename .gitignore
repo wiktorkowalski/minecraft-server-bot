@@ -44,6 +44,6 @@ appsettings.Local.json
 .idea/
 *.sln.iml
 
-# Local data
-data/
+# Local runtime data (root-level only — anchored to avoid matching src/.../Data/)
+/data/
 mc-bot.db*

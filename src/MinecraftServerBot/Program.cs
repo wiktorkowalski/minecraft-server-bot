@@ -1,5 +1,7 @@
 using DotNetEnv;
+using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
+using MinecraftServerBot.Data;
 using Serilog;
 
 Env.TraversePath().Load();
@@ -54,7 +56,21 @@ try
     builder.Services.AddOptions<OpenTelemetryOptions>()
         .Bind(builder.Configuration.GetSection(OpenTelemetryOptions.SectionName));
 
+    var dataPath = Environment.GetEnvironmentVariable("DATA_PATH") ?? "data";
+    Directory.CreateDirectory(dataPath);
+    var connectionString = builder.Configuration.GetConnectionString("Database")
+        ?? $"Data Source={Path.Combine(dataPath, "mc-bot.db")}";
+
+    builder.Services.AddDbContextFactory<McBotDbContext>(options =>
+        options.UseSqlite(connectionString));
+
     var app = builder.Build();
+
+    var dbFactory = app.Services.GetRequiredService<IDbContextFactory<McBotDbContext>>();
+    await using (var db = await dbFactory.CreateDbContextAsync())
+    {
+        await db.Database.MigrateAsync();
+    }
 
     app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
