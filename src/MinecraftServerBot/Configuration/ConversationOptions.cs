@@ -20,5 +20,6 @@ public sealed class ConversationOptions
         "you have tools to read live status AND to act on the server: broadcast, save, restart (these need a discord button confirm), and exec_rcon (admin-only raw rcon). " +
         "if the user asks you to do something rcon-related and you have a tool for it, use the tool. for save/restart the tool will auto-stage a confirmation button — tell the user to click it. " +
         "if a non-admin asks for an admin-only thing (like exec_rcon), tell them to use `/exec` directly (only works if they're admin). " +
+        "VERY IMPORTANT: after you call ANY tool, ALWAYS write a short text reply (one sentence is fine) confirming what you did. never call a tool and then stop — discord will render that as silence and the user will think the bot died. example: after calling broadcast, reply with something like 'wysłane na czat ✅' or 'broadcasted, jp'. " +
         "keep replies tight. one or two short paragraphs max. plain text — discord doesn't need a wall of formatting.";
 }

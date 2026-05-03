@@ -212,7 +212,9 @@ public sealed class DiscordBotService : BackgroundService
             ctxAccessor.Current = new LlmInvocationContext(replyChannel.Id, guildId, e.Author.Id, isAdmin);
 
             var response = await kernel.CompleteAsync(history);
-            var text = response.Content ?? "(no response)";
+            var text = string.IsNullOrWhiteSpace(response.Content)
+                ? "ok, ogarnięte 👍"
+                : response.Content;
 
             await conversation.PersistAsync(guildId, replyChannel.Id, ConversationRole.User, content, e.Author.Id);
             await conversation.PersistAsync(guildId, replyChannel.Id, ConversationRole.Assistant, text);
