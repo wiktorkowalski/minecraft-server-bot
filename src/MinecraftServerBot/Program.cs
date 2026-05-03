@@ -2,6 +2,7 @@ using DotNetEnv;
 using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data;
+using MinecraftServerBot.Minecraft;
 using Serilog;
 
 Env.TraversePath().Load();
@@ -63,6 +64,10 @@ try
 
     builder.Services.AddDbContextFactory<McBotDbContext>(options =>
         options.UseSqlite(connectionString));
+
+    builder.Services.AddSingleton<IRconClient, RconClient>();
+    builder.Services.AddSingleton<ISlpClient, SlpClient>();
+    builder.Services.AddSingleton<McServerActions>();
 
     var app = builder.Build();
 
