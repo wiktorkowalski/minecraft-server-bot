@@ -3,6 +3,7 @@ using DSharpPlus.SlashCommands;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MinecraftServerBot.Configuration;
+using MinecraftServerBot.Data.Entities;
 using MinecraftServerBot.Minecraft;
 using MinecraftServerBot.Services;
 
@@ -15,6 +16,10 @@ public sealed class MinecraftCommands : ApplicationCommandModule
     public required McStatusPollerService Poller { get; set; }
 
     public required RateLimitService RateLimit { get; set; }
+
+    public required ConfirmationService Confirmation { get; set; }
+
+    public required AuditService Audit { get; set; }
 
     public required IOptionsMonitor<DiscordOptions> DiscordOptions { get; set; }
 
@@ -77,29 +82,44 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         await ctx.DeferAsync();
         var result = await Actions.SayAsync(message);
         var content = result.Ok ? $"Broadcast sent: `{message}`" : $"Failed: {result.Error}";
+        await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "say",
+            result.Ok ? AuditOutcome.Ok : AuditOutcome.Error, args: message, detail: result.Error);
         await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(content));
     }
 
-    [SlashCommand("save", "Save the world (RCON save-all)")]
+    [SlashCommand("save", "Save the world (save-all) — requires confirmation")]
     public async Task SaveAsync(InteractionContext ctx)
     {
-        // TODO(task #11): wrap with ConfirmationService
-        await ctx.DeferAsync();
-        var result = await Actions.SaveAllAsync();
-        var content = result.Ok ? "save-all issued." : $"Failed: {result.Error}";
-        await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(content));
+        await RequestConfirmationAsync(ctx, "save", null, async ct =>
+        {
+            var result = await Actions.SaveAllAsync(ct);
+            return result.Ok ? "save-all issued." : $"Failed: {result.Error}";
+        });
     }
 
-    [SlashCommand("restart", "Restart the server (save-all + stop; pod auto-restarts)")]
+    [SlashCommand("restart", "Restart the server (save-all + stop) — requires confirmation")]
     public async Task RestartAsync(InteractionContext ctx)
     {
-        // TODO(task #11): wrap with ConfirmationService
+        await RequestConfirmationAsync(ctx, "restart", null, async ct =>
+        {
+            var result = await Actions.RestartAsync(ct);
+            return result.Ok
+                ? "Restart initiated: save-all + stop sent. Server will come back via k8s/Argo."
+                : $"Failed: {result.Error}";
+        });
+    }
+
+    private async Task RequestConfirmationAsync(
+        InteractionContext ctx,
+        string action,
+        string? args,
+        Func<CancellationToken, Task<string>> execute)
+    {
         await ctx.DeferAsync();
-        var result = await Actions.RestartAsync();
-        var content = result.Ok
-            ? "Restart initiated: save-all + stop sent. Server will come back via k8s/Argo."
-            : $"Failed: {result.Error}";
-        await ctx.EditResponseAsync(new DiscordWebhookBuilder().WithContent(content));
+        var (embed, components, _) = Confirmation.Build(new ConfirmationRequest(action, args, ctx.User.Id, execute));
+        var builder = new DiscordWebhookBuilder().AddEmbed(embed);
+        builder.AddComponents(components);
+        await ctx.EditResponseAsync(builder);
     }
 
     [SlashCommand("exec", "[Admin] Run a raw RCON command")]
@@ -112,6 +132,8 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         var admins = DiscordOptions.CurrentValue.AdminUserIds;
         if (!admins.Contains(ctx.User.Id))
         {
+            await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "exec",
+                AuditOutcome.Blocked, args: command, detail: "non-admin");
             await ctx.EditResponseAsync(new DiscordWebhookBuilder()
                 .WithContent("`/exec` is admin-only."));
             return;
@@ -120,6 +142,8 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         var rateLimit = ExecOptions.CurrentValue.RateLimitPerMinute;
         if (!RateLimit.TryAcquire(ctx.User.Id, rateLimit, TimeSpan.FromMinutes(1)))
         {
+            await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "exec",
+                AuditOutcome.Blocked, args: command, detail: "rate-limited");
             await ctx.EditResponseAsync(new DiscordWebhookBuilder()
                 .WithContent($"Rate limit hit ({rateLimit}/min). Try again later."));
             return;
@@ -128,10 +152,15 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         var result = await Actions.ExecRawAsync(command);
         if (!result.Ok)
         {
+            await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "exec",
+                AuditOutcome.Blocked, args: command, detail: result.Error);
             await ctx.EditResponseAsync(new DiscordWebhookBuilder()
                 .WithContent($"Refused/failed: {result.Error}"));
             return;
         }
+
+        await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "exec",
+            AuditOutcome.Ok, args: command);
 
         var limit = ExecOptions.CurrentValue.OutputCharLimit;
         var output = result.Output.Length == 0 ? "(no output)" : result.Output;

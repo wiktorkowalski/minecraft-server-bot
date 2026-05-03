@@ -75,6 +75,8 @@ try
     builder.Services.AddHostedService(sp => sp.GetRequiredService<McStatusPollerService>());
 
     builder.Services.AddSingleton<RateLimitService>();
+    builder.Services.AddSingleton<AuditService>();
+    builder.Services.AddSingleton<ConfirmationService>();
     builder.Services.AddSingleton<ConversationService>();
     builder.Services.AddSingleton<ServerStatusPlugin>();
     builder.Services.AddSingleton<KernelService>();

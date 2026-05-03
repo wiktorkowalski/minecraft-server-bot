@@ -109,6 +109,7 @@ public sealed class DiscordBotService : BackgroundService
         _client.SocketErrored += OnSocketError;
         _client.Resumed += OnResumed;
         _client.MessageCreated += OnMessageCreatedAsync;
+        _client.ComponentInteractionCreated += OnComponentInteractionAsync;
 
         await _client.ConnectAsync();
         _reconnectAttempts = 0;
@@ -205,6 +206,20 @@ public sealed class DiscordBotService : BackgroundService
             {
                 // best effort
             }
+        }
+    }
+
+    private async Task OnComponentInteractionAsync(DiscordClient client, ComponentInteractionCreateEventArgs e)
+    {
+        try
+        {
+            await using var scope = _services.CreateAsyncScope();
+            var confirmation = scope.ServiceProvider.GetRequiredService<ConfirmationService>();
+            await confirmation.HandleInteractionAsync(client, e);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling component interaction");
         }
     }
 
