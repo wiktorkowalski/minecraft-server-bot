@@ -94,7 +94,50 @@ try
         await db.Database.MigrateAsync();
     }
 
-    app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+    app.MapGet("/health", (IServiceProvider sp) =>
+    {
+        var bot = sp.GetRequiredService<DiscordBotService>();
+        var poller = sp.GetRequiredService<McStatusPollerService>();
+        var healthOpts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<HealthOptions>>().Value;
+
+        var lastPoll = poller.LastSuccessfulPollUtc;
+        var pollAge = lastPoll is null ? (TimeSpan?)null : DateTime.UtcNow - lastPoll.Value;
+        var pollFresh = pollAge is { } a && a < TimeSpan.FromMinutes(2);
+
+        var discord = new
+        {
+            ok = bot.IsReady,
+            detail = bot.IsReady ? "connected" : "not yet ready",
+        };
+        var slp = new
+        {
+            ok = poller.LastStatus.Online,
+            detail = poller.LastStatus.Online
+                ? $"online {poller.LastStatus.OnlinePlayers}/{poller.LastStatus.MaxPlayers}"
+                : poller.LastStatus.Error ?? "down",
+        };
+        var rcon = new
+        {
+            ok = pollFresh,
+            detail = lastPoll is null
+                ? "no successful poll yet"
+                : $"last successful poll {pollAge!.Value.TotalSeconds:F0}s ago",
+        };
+
+        var anyDown = !discord.ok || !slp.ok || !rcon.ok;
+        var unhealthy = healthOpts.StrictMode ? anyDown : !discord.ok;
+
+        var body = new
+        {
+            status = anyDown ? "degraded" : "ok",
+            components = new { discord, rcon, slp },
+            lastPollUtc = lastPoll,
+        };
+
+        return unhealthy
+            ? Results.Json(body, statusCode: 503)
+            : Results.Ok(body);
+    });
 
     await app.RunAsync();
 }
