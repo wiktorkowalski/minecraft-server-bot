@@ -79,7 +79,8 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         InteractionContext ctx,
         [Option("message", "Message to broadcast")] string message)
     {
-        await ctx.DeferAsync();
+        var ephemeral = !DiscordOptions.CurrentValue.PublicActionConfirmations;
+        await ctx.DeferAsync(ephemeral);
         var result = await Actions.SayAsync(message);
         var content = result.Ok ? $"Broadcast sent: `{message}`" : $"Failed: {result.Error}";
         await Audit.WriteAsync(ctx.User.Id, AuditSource.Slash, "say",
@@ -127,7 +128,8 @@ public sealed class MinecraftCommands : ApplicationCommandModule
         InteractionContext ctx,
         [Option("command", "Raw RCON command (e.g. 'list', 'time set day')")] string command)
     {
-        await ctx.DeferAsync();
+        var ephemeral = !DiscordOptions.CurrentValue.PublicActionConfirmations;
+        await ctx.DeferAsync(ephemeral);
 
         var admins = DiscordOptions.CurrentValue.AdminUserIds;
         if (!admins.Contains(ctx.User.Id))

@@ -67,6 +67,33 @@ public sealed class KernelService
         return response;
     }
 
+    public async Task<string> OneShotAsync(
+        string systemPrompt,
+        string userPrompt,
+        int maxTokens,
+        CancellationToken ct = default)
+    {
+        var opts = _options.CurrentValue;
+        var settings = new PromptExecutionSettings
+        {
+            FunctionChoiceBehavior = FunctionChoiceBehavior.None(),
+            ExtensionData = new Dictionary<string, object>
+            {
+                ["temperature"] = opts.Temperature,
+                ["max_tokens"] = maxTokens,
+            },
+        };
+
+        var history = new ChatHistory();
+        history.AddSystemMessage(systemPrompt);
+        history.AddUserMessage(userPrompt);
+
+        var response = await _chat.GetChatMessageContentAsync(history, settings, _kernel, ct);
+
+        LogTokenUsage(response, opts.Model);
+        return response.Content ?? string.Empty;
+    }
+
     private void LogTokenUsage(ChatMessageContent response, string model)
     {
         if (response.Metadata is null)

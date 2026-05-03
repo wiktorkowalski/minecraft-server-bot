@@ -13,4 +13,6 @@ public sealed class DiscordOptions
     public List<ulong> AdminUserIds { get; init; } = [];
 
     public bool DmFromAdminsOnly { get; init; } = true;
+
+    public bool PublicActionConfirmations { get; init; }
 }

@@ -59,6 +59,9 @@ try
     builder.Services.AddOptions<OpenTelemetryOptions>()
         .Bind(builder.Configuration.GetSection(OpenTelemetryOptions.SectionName));
 
+    builder.Services.AddOptions<InGameCommentaryOptions>()
+        .Bind(builder.Configuration.GetSection(InGameCommentaryOptions.SectionName));
+
     var dataPath = Environment.GetEnvironmentVariable("DATA_PATH") ?? "data";
     Directory.CreateDirectory(dataPath);
     var connectionString = builder.Configuration.GetConnectionString("Database")
@@ -88,6 +91,7 @@ try
 
     builder.Services.AddHostedService<PresenceUpdaterService>();
     builder.Services.AddHostedService<AnnouncementService>();
+    builder.Services.AddHostedService<InGameCommentaryService>();
 
     var app = builder.Build();
 
