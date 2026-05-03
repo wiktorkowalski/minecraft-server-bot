@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using MinecraftServerBot.Commands;
 using MinecraftServerBot.Configuration;
 using MinecraftServerBot.Data.Entities;
+using MinecraftServerBot.Plugins;
 
 namespace MinecraftServerBot.Services;
 
@@ -146,8 +147,12 @@ public sealed class DiscordBotService : BackgroundService
             return;
         }
 
-        var isDm = e.Channel.IsPrivate;
+        var channel = e.Channel;
+        var isDm = channel.IsPrivate;
         var mentionsUs = e.MentionedUsers.Any(u => u.Id == client.CurrentUser.Id);
+
+        DiscordChannel replyChannel;
+        var spawnNewThread = false;
 
         if (isDm)
         {
@@ -155,18 +160,26 @@ public sealed class DiscordBotService : BackgroundService
             {
                 return;
             }
+
+            replyChannel = channel;
         }
-        else
+        else if (channel.IsThread && channel.ParentId == _options.AllowedChannelId)
         {
-            if (e.Channel.Id != _options.AllowedChannelId)
+            if (channel is DiscordThreadChannel thread && thread.CreatorId != client.CurrentUser.Id)
             {
                 return;
             }
 
-            if (!mentionsUs)
-            {
-                return;
-            }
+            replyChannel = channel;
+        }
+        else if (channel.Id == _options.AllowedChannelId && mentionsUs)
+        {
+            spawnNewThread = true;
+            replyChannel = channel;
+        }
+        else
+        {
+            return;
         }
 
         try
@@ -177,36 +190,58 @@ public sealed class DiscordBotService : BackgroundService
                 return;
             }
 
-            await using var scope = _services.CreateAsyncScope();
-            var conversation = scope.ServiceProvider.GetRequiredService<MinecraftServerBot.Services.ConversationService>();
-            var kernel = scope.ServiceProvider.GetRequiredService<MinecraftServerBot.Services.KernelService>();
+            if (spawnNewThread)
+            {
+                replyChannel = await e.Message.CreateThreadAsync(
+                    BuildThreadName(content),
+                    AutoArchiveDuration.Day);
+            }
 
-            await e.Channel.TriggerTypingAsync();
+            await using var scope = _services.CreateAsyncScope();
+            var conversation = scope.ServiceProvider.GetRequiredService<ConversationService>();
+            var kernel = scope.ServiceProvider.GetRequiredService<KernelService>();
+            var ctxAccessor = scope.ServiceProvider.GetRequiredService<LlmInvocationContextAccessor>();
+
+            await replyChannel.TriggerTypingAsync();
 
             var guildId = e.Guild?.Id ?? 0UL;
-            var history = await conversation.LoadHistoryAsync(guildId, e.Channel.Id);
+            var history = await conversation.LoadHistoryAsync(guildId, replyChannel.Id);
             history.AddUserMessage(content);
+
+            var isAdmin = _options.AdminUserIds.Contains(e.Author.Id);
+            ctxAccessor.Current = new LlmInvocationContext(replyChannel.Id, guildId, e.Author.Id, isAdmin);
 
             var response = await kernel.CompleteAsync(history);
             var text = response.Content ?? "(no response)";
 
-            await conversation.PersistAsync(guildId, e.Channel.Id, ConversationRole.User, content, e.Author.Id);
-            await conversation.PersistAsync(guildId, e.Channel.Id, ConversationRole.Assistant, text);
+            await conversation.PersistAsync(guildId, replyChannel.Id, ConversationRole.User, content, e.Author.Id);
+            await conversation.PersistAsync(guildId, replyChannel.Id, ConversationRole.Assistant, text);
 
-            await e.Message.RespondAsync(text.Length > 1900 ? text[..1900] + "…" : text);
+            await replyChannel.SendMessageAsync(text.Length > 1900 ? text[..1900] + "…" : text);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error handling @mention from {User}", e.Author.Id);
+            _logger.LogError(ex, "Error handling message from {User}", e.Author.Id);
             try
             {
-                await e.Message.RespondAsync($"Sorry, hit an error: `{ex.Message}`");
+                await e.Channel.SendMessageAsync($"Sorry, hit an error: `{ex.Message}`");
             }
             catch
             {
                 // best effort
             }
         }
+    }
+
+    private static string BuildThreadName(string content)
+    {
+        var oneLine = content.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        if (oneLine.Length > 90)
+        {
+            oneLine = oneLine[..90];
+        }
+
+        return string.IsNullOrWhiteSpace(oneLine) ? "Chat" : oneLine;
     }
 
     private async Task OnComponentInteractionAsync(DiscordClient client, ComponentInteractionCreateEventArgs e)

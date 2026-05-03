@@ -18,7 +18,9 @@ public sealed class KernelService
         IOptions<LlmOptions> initialOptions,
         IOptionsMonitor<LlmOptions> options,
         ILogger<KernelService> logger,
-        ServerStatusPlugin statusPlugin)
+        ServerStatusPlugin statusPlugin,
+        ServerControlPlugin controlPlugin,
+        ServerExecPlugin execPlugin)
     {
         _options = options;
         _logger = logger;
@@ -32,6 +34,8 @@ public sealed class KernelService
             endpoint: new Uri(initial.Endpoint));
 
         builder.Plugins.AddFromObject(statusPlugin, "ServerStatus");
+        builder.Plugins.AddFromObject(controlPlugin, "ServerControl");
+        builder.Plugins.AddFromObject(execPlugin, "ServerExec");
 
         _kernel = builder.Build();
         _chat = _kernel.GetRequiredService<IChatCompletionService>();

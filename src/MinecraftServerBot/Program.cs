@@ -78,7 +78,10 @@ try
     builder.Services.AddSingleton<AuditService>();
     builder.Services.AddSingleton<ConfirmationService>();
     builder.Services.AddSingleton<ConversationService>();
+    builder.Services.AddSingleton<LlmInvocationContextAccessor>();
     builder.Services.AddSingleton<ServerStatusPlugin>();
+    builder.Services.AddSingleton<ServerControlPlugin>();
+    builder.Services.AddSingleton<ServerExecPlugin>();
     builder.Services.AddSingleton<KernelService>();
     builder.Services.AddSingleton<DiscordBotService>();
     builder.Services.AddHostedService(sp => sp.GetRequiredService<DiscordBotService>());
