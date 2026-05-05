@@ -1,3 +1,4 @@
+using System.Text;
 using DotNetEnv;
 using Microsoft.EntityFrameworkCore;
 using MinecraftServerBot.Configuration;
@@ -6,6 +7,10 @@ using MinecraftServerBot.Llm;
 using MinecraftServerBot.Minecraft;
 using MinecraftServerBot.Plugins;
 using MinecraftServerBot.Services;
+using OpenTelemetry;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Serilog;
 
 Env.TraversePath().Load();
@@ -59,6 +64,43 @@ try
 
     builder.Services.AddOptions<OpenTelemetryOptions>()
         .Bind(builder.Configuration.GetSection(OpenTelemetryOptions.SectionName));
+
+    var otelOpts = builder.Configuration
+        .GetSection(OpenTelemetryOptions.SectionName)
+        .Get<OpenTelemetryOptions>();
+
+    if (otelOpts is { Enabled: true })
+    {
+        AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnostics", true);
+        AppContext.SetSwitch("Microsoft.SemanticKernel.Experimental.GenAI.EnableOTelDiagnosticsSensitive", true);
+
+        var basicAuth = Convert.ToBase64String(
+            Encoding.UTF8.GetBytes($"{otelOpts.LangfusePublicKey}:{otelOpts.LangfuseSecretKey}"));
+
+        var tracesEndpoint = otelOpts.LangfuseEndpoint!.TrimEnd('/');
+        if (!tracesEndpoint.EndsWith("/v1/traces", StringComparison.OrdinalIgnoreCase))
+        {
+            tracesEndpoint += "/v1/traces";
+        }
+
+        builder.Services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddService("minecraft-server-bot"))
+            .WithTracing(t => t
+                .SetSampler(new AlwaysOnSampler())
+                .AddSource("Microsoft.SemanticKernel*")
+                .AddProcessor(sp => new LangfuseEnrichmentProcessor(
+                    sp.GetRequiredService<ILoggerFactory>()))
+                .AddOtlpExporter(o =>
+                {
+                    o.Endpoint = new Uri(tracesEndpoint);
+                    o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                    o.Headers = $"Authorization=Basic {basicAuth}";
+                }));
+
+        Log.Information(
+            "OpenTelemetry tracing enabled, exporting traces to {Endpoint}",
+            tracesEndpoint);
+    }
 
     builder.Services.AddOptions<InGameCommentaryOptions>()
         .Bind(builder.Configuration.GetSection(InGameCommentaryOptions.SectionName));
