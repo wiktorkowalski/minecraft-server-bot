@@ -11,16 +11,21 @@ namespace MinecraftServerBot.Services;
 
 public sealed class McStatusPollerService : BackgroundService
 {
+    private const int OfflineConfirmationReadings = 2;
+
+    private static readonly McServerStatus NotYetPolled = McServerStatus.Offline("not yet polled");
+
     private readonly McServerActions _actions;
     private readonly IDbContextFactory<McBotDbContext> _dbFactory;
     private readonly IOptionsMonitor<PollerOptions> _options;
     private readonly ILogger<McStatusPollerService> _logger;
 
-    private McServerStatus _lastStatus = McServerStatus.Offline("not yet polled");
+    private McServerStatus _lastStatus = NotYetPolled;
+    private McServerStatus? _confirmedStatus;
+    private int _consecutiveOfflineReadings;
     private HashSet<string> _lastPlayers = new(StringComparer.OrdinalIgnoreCase);
     private DateTime? _lastSuccessfulPollUtc;
     private string? _lastError;
-    private bool _hasStatusBaseline;
     private bool _hasPlayerBaseline;
     private bool _playerListStale = true;
 
@@ -84,31 +89,42 @@ public sealed class McStatusPollerService : BackgroundService
 
     private async Task PollOnceAsync(CancellationToken ct)
     {
-        var status = await _actions.GetStatusAsync(ct);
-        var previous = _lastStatus;
-        _lastStatus = status;
+        var raw = await _actions.GetStatusAsync(ct);
+        _lastStatus = raw;
 
-        // The first reading is compared against the "not yet polled" placeholder, so its transition is not a real change
-        var isStatusBaseline = !_hasStatusBaseline;
-        _hasStatusBaseline = true;
-
-        if (status.Online)
+        if (raw.Online)
         {
             _lastSuccessfulPollUtc = DateTime.UtcNow;
             _lastError = null;
         }
         else
         {
-            _lastError = status.Error;
+            _lastError = raw.Error;
         }
+
+        if (ConfirmStatus(raw) is not { } status)
+        {
+            _logger.LogDebug(
+                "Offline reading {Reading}/{Required} not confirmed yet: {Error}",
+                _consecutiveOfflineReadings,
+                OfflineConfirmationReadings,
+                raw.Error);
+            return;
+        }
+
+        // The first confirmed reading is compared against the "not yet polled" placeholder, so its transition is not a real change
+        var isStatusBaseline = _confirmedStatus is null;
+        var previous = _confirmedStatus ?? NotYetPolled;
+        _confirmedStatus = status;
 
         if (status.Online != previous.Online)
         {
             _logger.LogInformation(
-                "Server status transition: {Previous} -> {Current} (baseline: {IsBaseline})",
+                "Server status transition: {Previous} -> {Current} (baseline: {IsBaseline}, error: {Error})",
                 previous.Online ? "online" : "offline",
                 status.Online ? "online" : "offline",
-                isStatusBaseline);
+                isStatusBaseline,
+                status.Error);
             await SafeInvokeAsync(StatusChanged, new ServerStatusChangedEvent(previous, status, isStatusBaseline));
         }
 
@@ -137,6 +153,21 @@ public sealed class McStatusPollerService : BackgroundService
             _hasPlayerBaseline = true;
             _playerListStale = false;
         }
+    }
+
+    // SLP times out now and then while the server is fine; a single offline reading must not announce, close sessions or reset players
+    private McServerStatus? ConfirmStatus(McServerStatus raw)
+    {
+        if (raw.Online)
+        {
+            _consecutiveOfflineReadings = 0;
+            return raw;
+        }
+
+        _consecutiveOfflineReadings++;
+        return _confirmedStatus is { Online: false } || _consecutiveOfflineReadings >= OfflineConfirmationReadings
+            ? raw
+            : null;
     }
 
     private async Task DiffPlayersAsync(CancellationToken ct)
