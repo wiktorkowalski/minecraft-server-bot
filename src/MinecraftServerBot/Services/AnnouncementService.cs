@@ -83,8 +83,9 @@ public sealed class AnnouncementService : IHostedService
 
     private async Task PostAsync(string content)
     {
+        // REST posts work while the gateway is down, so gate only on the client existing
         var client = _bot.Client;
-        if (client is null || !_bot.IsReady)
+        if (client is null)
         {
             return;
         }
