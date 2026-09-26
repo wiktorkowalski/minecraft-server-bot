@@ -83,9 +83,9 @@ public sealed class AnnouncementService : IHostedService
 
     private async Task PostAsync(string content)
     {
-        // REST posts work while the gateway is down, so gate only on the client existing
+        // REST posts work while the gateway is down; before the first Ready the startup poll would announce a fake transition
         var client = _bot.Client;
-        if (client is null)
+        if (client is null || !_bot.HasConnectedOnce)
         {
             return;
         }
