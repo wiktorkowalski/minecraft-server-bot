@@ -31,18 +31,22 @@ public sealed class McServerActions
     public Task<McServerStatus> GetStatusAsync(CancellationToken ct = default) =>
         _slp.QueryAsync(ct);
 
-    public async Task<IReadOnlyList<string>> ListPlayersAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>> ListPlayersAsync(CancellationToken ct = default) =>
+        await TryListPlayersAsync(ct) ?? [];
+
+    // Null means the list is unknown (RCON failed or odd reply), which callers must not read as "nobody online"
+    public async Task<IReadOnlyList<string>?> TryListPlayersAsync(CancellationToken ct = default)
     {
         var result = await _rcon.ExecuteAsync("list", ct);
         if (!result.Ok)
         {
-            return [];
+            return null;
         }
 
         var match = ListResponseRegex.Match(result.Output);
         if (!match.Success)
         {
-            return [];
+            return null;
         }
 
         var players = match.Groups[3].Value;

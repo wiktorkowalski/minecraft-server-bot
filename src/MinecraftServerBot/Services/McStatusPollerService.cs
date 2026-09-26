@@ -20,6 +20,9 @@ public sealed class McStatusPollerService : BackgroundService
     private HashSet<string> _lastPlayers = new(StringComparer.OrdinalIgnoreCase);
     private DateTime? _lastSuccessfulPollUtc;
     private string? _lastError;
+    private bool _hasStatusBaseline;
+    private bool _hasPlayerBaseline;
+    private bool _playerListStale = true;
 
     public McStatusPollerService(
         McServerActions actions,
@@ -85,6 +88,10 @@ public sealed class McStatusPollerService : BackgroundService
         var previous = _lastStatus;
         _lastStatus = status;
 
+        // The first reading is compared against the "not yet polled" placeholder, so its transition is not a real change
+        var isStatusBaseline = !_hasStatusBaseline;
+        _hasStatusBaseline = true;
+
         if (status.Online)
         {
             _lastSuccessfulPollUtc = DateTime.UtcNow;
@@ -98,10 +105,11 @@ public sealed class McStatusPollerService : BackgroundService
         if (status.Online != previous.Online)
         {
             _logger.LogInformation(
-                "Server status transition: {Previous} -> {Current}",
+                "Server status transition: {Previous} -> {Current} (baseline: {IsBaseline})",
                 previous.Online ? "online" : "offline",
-                status.Online ? "online" : "offline");
-            await SafeInvokeAsync(StatusChanged, new ServerStatusChangedEvent(previous, status));
+                status.Online ? "online" : "offline",
+                isStatusBaseline);
+            await SafeInvokeAsync(StatusChanged, new ServerStatusChangedEvent(previous, status, isStatusBaseline));
         }
 
         if (status.OnlinePlayers != previous.OnlinePlayers)
@@ -110,23 +118,43 @@ public sealed class McStatusPollerService : BackgroundService
         }
 
         var shouldListPlayers = status.Online
-            && status.OnlinePlayers != previous.OnlinePlayers
+            && (status.OnlinePlayers != previous.OnlinePlayers || _playerListStale)
             && _options.CurrentValue.RconListOnPlayerCountChange;
 
         if (shouldListPlayers)
         {
             await DiffPlayersAsync(ct);
         }
-        else if (!status.Online && _lastPlayers.Count > 0)
+        else if (!status.Online)
         {
-            await CloseAllSessionsAsync(ct, reason: "server offline");
-            _lastPlayers = new(StringComparer.OrdinalIgnoreCase);
+            if (_lastPlayers.Count > 0)
+            {
+                await CloseAllSessionsAsync(ct, reason: "server offline");
+                _lastPlayers = new(StringComparer.OrdinalIgnoreCase);
+            }
+
+            // Nobody can be online now, so every later join is a real one
+            _hasPlayerBaseline = true;
+            _playerListStale = false;
         }
     }
 
     private async Task DiffPlayersAsync(CancellationToken ct)
     {
-        var current = await _actions.ListPlayersAsync(ct);
+        var current = await _actions.TryListPlayersAsync(ct);
+        if (current is null)
+        {
+            if (!_playerListStale)
+            {
+                _logger.LogWarning("RCON player list unavailable; keeping last known players until it recovers");
+            }
+
+            _playerListStale = true;
+            return;
+        }
+
+        // Players already online at startup show up as joins in the first list; they did not just join
+        var isPlayerBaseline = !_hasPlayerBaseline;
         var currentSet = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
 
         var joined = currentSet.Except(_lastPlayers).ToList();
@@ -135,7 +163,7 @@ public sealed class McStatusPollerService : BackgroundService
         foreach (var name in joined)
         {
             await OpenSessionAsync(name, ct);
-            await SafeInvokeAsync(PlayerJoined, new PlayerJoinedEvent(name));
+            await SafeInvokeAsync(PlayerJoined, new PlayerJoinedEvent(name, isPlayerBaseline));
         }
 
         foreach (var name in left)
@@ -145,6 +173,8 @@ public sealed class McStatusPollerService : BackgroundService
         }
 
         _lastPlayers = currentSet;
+        _hasPlayerBaseline = true;
+        _playerListStale = false;
     }
 
     private async Task OpenSessionAsync(string name, CancellationToken ct)
