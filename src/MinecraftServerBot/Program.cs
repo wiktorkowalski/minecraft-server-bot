@@ -164,7 +164,7 @@ try
         var discord = new
         {
             ok = bot.IsReady,
-            detail = bot.IsReady ? "connected" : "not yet ready",
+            detail = bot.IsReady ? "connected" : "not connected",
         };
         var slp = new
         {

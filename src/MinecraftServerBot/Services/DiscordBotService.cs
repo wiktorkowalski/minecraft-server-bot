@@ -17,7 +17,8 @@ namespace MinecraftServerBot.Services;
 
 public sealed class DiscordBotService : BackgroundService
 {
-    private const int MaxReconnectAttempts = 10;
+    private static readonly TimeSpan WatchdogInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan MaxDisconnectedDuration = TimeSpan.FromMinutes(5);
 
     private readonly DiscordOptions _options;
     private readonly IServiceProvider _services;
@@ -27,6 +28,7 @@ public sealed class DiscordBotService : BackgroundService
     private DiscordClient? _client;
     private SlashCommandsExtension? _slashCommands;
     private int _reconnectAttempts;
+    private long _disconnectedSinceTicks;
 
     public DiscordBotService(
         IOptions<DiscordOptions> options,
@@ -40,7 +42,8 @@ public sealed class DiscordBotService : BackgroundService
 
     public DiscordClient? Client => _client;
 
-    public bool IsReady => _readyTcs.Task.IsCompletedSuccessfully;
+    public bool IsReady =>
+        _readyTcs.Task.IsCompletedSuccessfully && Interlocked.Read(ref _disconnectedSinceTicks) == 0;
 
     public Task WaitForReadyAsync(CancellationToken ct = default) =>
         _readyTcs.Task.WaitAsync(ct);
@@ -61,16 +64,11 @@ public sealed class DiscordBotService : BackgroundService
                 var delay = GetBackoffDelay(_reconnectAttempts);
                 _logger.LogError(
                     ex,
-                    "Discord connection failed (attempt {Attempt}/{Max}). Retrying in {Delay}s",
+                    "Discord connection failed (attempt {Attempt}). Retrying in {Delay}s",
                     _reconnectAttempts,
-                    MaxReconnectAttempts,
                     delay.TotalSeconds);
 
-                if (_reconnectAttempts >= MaxReconnectAttempts)
-                {
-                    _logger.LogCritical("Max reconnect attempts reached. Giving up");
-                    throw;
-                }
+                await DisposeClientAsync();
 
                 try
                 {
@@ -82,6 +80,12 @@ public sealed class DiscordBotService : BackgroundService
                 }
             }
         }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await DisposeClientAsync();
+        await base.StopAsync(cancellationToken);
     }
 
     private static TimeSpan GetBackoffDelay(int attempt) =>
@@ -114,28 +118,115 @@ public sealed class DiscordBotService : BackgroundService
         _client.Resumed += OnResumed;
         _client.MessageCreated += OnMessageCreatedAsync;
         _client.ComponentInteractionCreated += OnComponentInteractionAsync;
+        _client.SocketClosed += OnSocketClosed;
+        _client.Zombied += OnZombied;
 
+        // Down until Ready proves otherwise, so a handshake that never completes still trips the watchdog
+        Interlocked.Exchange(ref _disconnectedSinceTicks, DateTime.UtcNow.Ticks);
         await _client.ConnectAsync();
         _reconnectAttempts = 0;
 
-        await Task.Delay(Timeout.Infinite, stoppingToken);
+        // DSharpPlus AutoReconnect gives up silently after its own retries; rebuild the client if it stays down
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            await Task.Delay(WatchdogInterval, stoppingToken);
+
+            var since = Interlocked.Read(ref _disconnectedSinceTicks);
+            if (since == 0)
+            {
+                continue;
+            }
+
+            var downFor = DateTime.UtcNow - new DateTime(since, DateTimeKind.Utc);
+            if (downFor < MaxDisconnectedDuration)
+            {
+                continue;
+            }
+
+            _logger.LogWarning(
+                "Discord gateway down for {Minutes:F1} min without recovery. Rebuilding client",
+                downFor.TotalMinutes);
+            await DisposeClientAsync();
+            return;
+        }
     }
+
+    private async Task DisposeClientAsync()
+    {
+        var client = Interlocked.Exchange(ref _client, null);
+        if (client is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await client.DisconnectAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Disconnect of stale Discord client failed");
+        }
+
+        client.Dispose();
+    }
+
+    private void MarkDisconnected() =>
+        Interlocked.CompareExchange(ref _disconnectedSinceTicks, DateTime.UtcNow.Ticks, 0);
+
+    private void MarkConnected() => Interlocked.Exchange(ref _disconnectedSinceTicks, 0);
 
     private Task OnReady(DiscordClient client, ReadyEventArgs e)
     {
+        // Late events from a disposed client must not touch the watchdog state of the current one
+        if (!ReferenceEquals(client, _client))
+        {
+            return Task.CompletedTask;
+        }
+
         _logger.LogInformation(
             "Discord connected as {Username}#{Discriminator}. AllowedChannel={AllowedChannel} BridgeChannel={BridgeChannel}",
             client.CurrentUser.Username,
             client.CurrentUser.Discriminator,
             _options.AllowedChannelId,
             _options.McChatBridgeChannelId?.ToString() ?? "(disabled)");
+        MarkConnected();
         _readyTcs.TrySetResult();
         return Task.CompletedTask;
     }
 
     private Task OnResumed(DiscordClient client, ReadyEventArgs e)
     {
+        if (!ReferenceEquals(client, _client))
+        {
+            return Task.CompletedTask;
+        }
+
         _logger.LogInformation("Discord connection resumed");
+        MarkConnected();
+        return Task.CompletedTask;
+    }
+
+    private Task OnSocketClosed(DiscordClient client, SocketCloseEventArgs e)
+    {
+        if (!ReferenceEquals(client, _client))
+        {
+            return Task.CompletedTask;
+        }
+
+        MarkDisconnected();
+        return Task.CompletedTask;
+    }
+
+    private Task OnZombied(DiscordClient client, ZombiedEventArgs e)
+    {
+        if (!ReferenceEquals(client, _client))
+        {
+            return Task.CompletedTask;
+        }
+
+        _logger.LogWarning("Discord connection zombied after {Failures} missed heartbeats", e.Failures);
+        MarkDisconnected();
         return Task.CompletedTask;
     }
 
