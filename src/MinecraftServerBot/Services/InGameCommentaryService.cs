@@ -81,7 +81,7 @@ public sealed class InGameCommentaryService : BackgroundService
     private Task OnStatusChangedAsync(ServerStatusChangedEvent evt)
     {
         var opts = _options.CurrentValue;
-        if (!opts.Enabled || !opts.OnServerUpDown)
+        if (!opts.Enabled || !opts.OnServerUpDown || evt.IsBaseline)
         {
             return Task.CompletedTask;
         }
@@ -100,7 +100,7 @@ public sealed class InGameCommentaryService : BackgroundService
     private Task OnPlayerJoinedAsync(PlayerJoinedEvent evt)
     {
         var opts = _options.CurrentValue;
-        if (!opts.Enabled || !opts.OnPlayerJoin)
+        if (!opts.Enabled || !opts.OnPlayerJoin || evt.IsBaseline)
         {
             return Task.CompletedTask;
         }

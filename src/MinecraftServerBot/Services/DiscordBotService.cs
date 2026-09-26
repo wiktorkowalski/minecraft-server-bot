@@ -42,8 +42,10 @@ public sealed class DiscordBotService : BackgroundService
 
     public DiscordClient? Client => _client;
 
+    public bool HasConnectedOnce => _readyTcs.Task.IsCompletedSuccessfully;
+
     public bool IsReady =>
-        _readyTcs.Task.IsCompletedSuccessfully && Interlocked.Read(ref _disconnectedSinceTicks) == 0;
+        HasConnectedOnce && Interlocked.Read(ref _disconnectedSinceTicks) == 0;
 
     public Task WaitForReadyAsync(CancellationToken ct = default) =>
         _readyTcs.Task.WaitAsync(ct);

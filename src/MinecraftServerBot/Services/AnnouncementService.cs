@@ -47,7 +47,7 @@ public sealed class AnnouncementService : IHostedService
     private Task OnStatusChangedAsync(ServerStatusChangedEvent evt)
     {
         var opts = _announcementOptions.CurrentValue;
-        if (!opts.Enabled || !opts.ServerUpDown)
+        if (!opts.Enabled || !opts.ServerUpDown || evt.IsBaseline)
         {
             return Task.CompletedTask;
         }
@@ -61,7 +61,7 @@ public sealed class AnnouncementService : IHostedService
     private Task OnPlayerJoinedAsync(PlayerJoinedEvent evt)
     {
         var opts = _announcementOptions.CurrentValue;
-        if (!opts.Enabled || !opts.PlayerJoinLeave)
+        if (!opts.Enabled || !opts.PlayerJoinLeave || evt.IsBaseline)
         {
             return Task.CompletedTask;
         }
@@ -83,9 +83,9 @@ public sealed class AnnouncementService : IHostedService
 
     private async Task PostAsync(string content)
     {
-        // REST posts work while the gateway is down, so gate only on the client existing
+        // REST posts work while the gateway is down; before the first Ready the startup poll would announce a fake transition
         var client = _bot.Client;
-        if (client is null)
+        if (client is null || !_bot.HasConnectedOnce)
         {
             return;
         }
